@@ -1,11 +1,12 @@
-
 -- adapted from https://github.com/wojciechz/learning_to_execute
 -- utilities for combining/flattening parameters in a model
--- the code in this script is more general than it needs to be, which is 
+-- the code in this script is more general than it needs to be, which is
 -- why it is kind of a large
 
 require 'torch'
 local model_utils = {}
+
+--{{{ combine all parameters from a list of modules into one underlying storage
 function model_utils.combine_all_parameters(...)
     --[[ like module:getParameters, but operates on many modules ]]--
 
@@ -27,6 +28,8 @@ function model_utils.combine_all_parameters(...)
     end
 
     local function storageInSet(set, storage)
+        -- returns the offset of the target storage in the
+        -- flattened storage
         local storageAndOffset = set[torch.pointer(storage)]
         if storageAndOffset == nil then
             return nil
@@ -56,6 +59,7 @@ function model_utils.combine_all_parameters(...)
         local flatParameters = Tensor(nParameters):fill(1)
         local flatStorage = flatParameters:storage()
 
+        -- layout all parameters strictly according to the storage sizes
         for k = 1,#parameters do
             local storageOffset = storageInSet(storages, parameters[k]:storage())
             parameters[k]:set(flatStorage,
@@ -71,6 +75,7 @@ function model_utils.combine_all_parameters(...)
         local flatUsedParameters = Tensor(nUsedParameters)
         local flatUsedStorage = flatUsedParameters:storage()
 
+        -- pack the arrays close together, removing holes
         for k = 1,#parameters do
             local offset = cumSumOfHoles[parameters[k]:storageOffset()]
             parameters[k]:set(flatUsedStorage,
@@ -79,11 +84,13 @@ function model_utils.combine_all_parameters(...)
                 parameters[k]:stride())
         end
 
+        -- copy parameter contents over to intermediate location
         for _, storageAndOffset in pairs(storages) do
             local k, v = unpack(storageAndOffset)
             flatParameters[{{v+1,v+k:size()}}]:copy(Tensor():set(k))
         end
 
+        -- copy parameter content into the target storage
         if cumSumOfHoles:sum() == 0 then
             flatUsedParameters:copy(flatParameters)
         else
@@ -106,10 +113,10 @@ function model_utils.combine_all_parameters(...)
     -- return new flat vector that contains all discrete parameters
     return flatParameters, flatGradParameters
 end
+--}}}
 
-
-
-
+--{{{ make T copies of the network and ensure that all clones share same
+-- params and gradParams storage
 function model_utils.clone_many_times(net, T)
     local clones = {}
 
@@ -137,6 +144,8 @@ function model_utils.clone_many_times(net, T)
         reader:close()
 
         if net.parameters then
+            -- make all clones share the sema underlying params
+            -- and gradParams storage
             local cloneParams, cloneGradParams = clone:parameters()
             local cloneParamsNoGrad
             for i = 1, #params do
@@ -145,7 +154,7 @@ function model_utils.clone_many_times(net, T)
             end
             if paramsNoGrad then
                 cloneParamsNoGrad = clone:parametersNoGrad()
-                for i =1,#paramsNoGrad do
+                for i =1, #paramsNoGrad do
                     cloneParamsNoGrad[i]:set(paramsNoGrad[i])
                 end
             end
@@ -154,9 +163,9 @@ function model_utils.clone_many_times(net, T)
         clones[t] = clone
         collectgarbage()
     end
-
     mem:close()
     return clones
 end
+--}}}
 
 return model_utils
